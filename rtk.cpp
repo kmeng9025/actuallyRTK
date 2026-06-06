@@ -1,4 +1,4 @@
-#define sender 1
+#define sender 0
 #define testing 0
 
 
@@ -11,8 +11,8 @@
 
 
 #define PIN_NSS 1
-#define PIN_IRQ 15
-#define PIN_CE 14
+#define PIN_IRQ 7
+#define PIN_CE 8
 #define PIN_SCK 2
 #define PIN_MISO 0
 #define PIN_MOSI 3
@@ -51,8 +51,9 @@ int initRadio(){
     radio.setPALevel(RF24_PA_MAX);
     radio.enableDynamicPayloads();
     radio.setAutoAck(true);
-    radio.setRetries(5, 2);
-    radio.setChannel(76);
+    radio.setRetries(10, 15);
+    radio.setChannel(120);
+    radio.setDataRate(RF24_250KBPS);
     radio.stopListening(addressSender);
     radio.openReadingPipe(1, addressReceiver);
 
@@ -251,14 +252,19 @@ void initLC29HBS() {
 uint8_t packet[32];
 int packetIndex = 0;
 uint32_t totalBytes = 0;
+uint32_t currentBytes = 0;
 absolute_time_t lastPrintTime = get_absolute_time();
+absolute_time_t firstByteTime = get_absolute_time();
+bool first = true;
 absolute_time_t lastByteTime = get_absolute_time();
 
 void calcStats() {
     if(base) {
         if (absolute_time_diff_us(lastPrintTime, get_absolute_time()) >= 1e6) {
-            printf("Sent bytes/s: %d\n", totalBytes);
-            totalBytes = 0;
+            printf("\nSent bytes/s: %d\n", currentBytes);
+            currentBytes = 0;
+            printf("Sent totalBytes: %d\n", totalBytes);
+            printf("Average Bytes/s: %.2f\n\n", totalBytes / (absolute_time_diff_us(firstByteTime, get_absolute_time())/1e6));
             lastPrintTime = get_absolute_time();
         }
     }
@@ -286,15 +292,24 @@ int mainLoop() {
                 printf("rtcm frame overrun");
                 break;
             }
+            if (first) {
+                firstByteTime = get_absolute_time();
+                first = false;
+            }
             totalBytes ++;
+            currentBytes ++;
             calcStats();
         }
         if (rtcmMessageIndex > 0 && absolute_time_diff_us(lastByteTime, get_absolute_time()) > 10e3) {
             for (int i = 0; i + 32 <= rtcmMessageIndex; i += 32) {
-                radio.write(&rtcmMessage[i], 32);
+               bool ok = radio.write(&rtcmMessage[i], 32);
+               if (!ok) {
+                printf("\ndropped byte in sending\n");
+               }
             }
             if (rtcmMessageIndex % 32 != 0) {
-                radio.write(&rtcmMessage[rtcmMessageIndex - rtcmMessageIndex%32], rtcmMessageIndex%32);
+                bool ok = radio.write(&rtcmMessage[rtcmMessageIndex - rtcmMessageIndex%32], rtcmMessageIndex%32);
+                if (!ok) printf("\ndropped byte in sending\n");
             }
             rtcmMessageIndex = 0;
         }
@@ -302,7 +317,7 @@ int mainLoop() {
         uint8_t pipe;
         while (radio.available(&pipe)) {
             uint8_t bytes = radio.getDynamicPayloadSize();
-            radio.read(&packet, bytes);
+            radio.read(packet, bytes);
             totalBytes += bytes;
             calcStats();
         }
